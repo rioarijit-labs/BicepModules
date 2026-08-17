@@ -1,0 +1,58 @@
+name: Publish Module
+
+# Tag a release per module, e.g.:
+#   git tag vnet/v1.0.0 && git push origin vnet/v1.0.0
+on:
+  push:
+    tags:
+      - '*/v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse module and version from tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          MODULE="${TAG%%/*}"
+          VERSION="${TAG#*/v}"
+          if [ ! -f "modules/${MODULE}/main.bicep" ]; then
+            echo "No module found at modules/${MODULE}/main.bicep for tag ${TAG}" >&2
+            exit 1
+          fi
+          echo "module=$MODULE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install/upgrade Bicep CLI
+        run: |
+          az bicep install
+          az bicep upgrade
+
+      - name: Lint and build
+        run: |
+          az bicep lint --file "modules/${{ steps.tag.outputs.module }}/main.bicep"
+          az bicep build --file "modules/${{ steps.tag.outputs.module }}/main.bicep" --stdout > /dev/null
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish versioned module
+        run: |
+          az bicep publish \
+            --file "modules/${{ steps.tag.outputs.module }}/main.bicep" \
+            --target "br:ghcr.io/rioarijit-labs/bicep/${{ steps.tag.outputs.module }}:${{ steps.tag.outputs.version }}" \
+            --force
+
+      - name: Publish 'latest' alias
+        run: |
+          az bicep publish \
+            --file "modules/${{ steps.tag.outputs.module }}/main.bicep" \
+            --target "br:ghcr.io/rioarijit-labs/bicep/${{ steps.tag.outputs.module }}:latest" \
+            --force
